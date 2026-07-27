@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project-specific
+# Keep example directories but ignore generated output
+00_inbox/
+01_raw_docx/
+02_normalized_text/
+03_review_draft/
+04_final_text/
+05_agent_chunks/
+manifests/
+glossary/
+outlines/
