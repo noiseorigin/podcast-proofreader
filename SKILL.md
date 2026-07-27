@@ -167,6 +167,8 @@ Apply conservative treatment: do not enhance, rewrite, or embellish facts. Prese
 - `corrections.json` - Sample ASR correction rules (21 rules)
 - `chapters.json` - Sample chapter definitions (9 chapters)
 - `speaker_map.json` - Sample speaker mapping
+- `CLAUDE.md` - Ready-to-use Claude Code project instructions
+- `AGENTS.md` - Ready-to-use Codex / OpenAI project instructions
 
 ### Root
 - `init_project.sh` - One-command project scaffold (creates dirs + copies templates)
