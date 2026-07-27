@@ -1,0 +1,51 @@
+{
+  "episode_id": "epXXX",
+  "episode_number": 0,
+  "title": "Episode Title",
+  "source": {
+    "type": "asr_export",
+    "original_path": "",
+    "managed_raw_docx": "",
+    "normalized_text": ""
+  },
+  "status": {
+    "raw_docx_copied": false,
+    "text_extracted": false,
+    "ai_review_draft": false,
+    "human_final_review": false,
+    "agent_chunks_exported": false
+  },
+  "notes": "",
+  "outputs": {
+    "review_draft": "",
+    "questions": "",
+    "outline": "",
+    "final_text": "",
+    "agent_chunks": ""
+  },
+  "proofreading": {
+    "first_pass": {
+      "basis": "",
+      "output": "",
+      "questions_path": "",
+      "outline_path": "",
+      "needs_human_review": true,
+      "uncertain_items_count": 0,
+      "resolved_items_count": 0,
+      "confirmed_terms_path": ""
+    },
+    "final": {
+      "status": "pending",
+      "final_path": "",
+      "generated_at": "",
+      "note": ""
+    }
+  },
+  "knowledge_base": {
+    "schema_version": "podcast_kb_chunk.v1",
+    "chunk_path": "",
+    "chunk_count": 0,
+    "exported_at": "",
+    "source": ""
+  }
+}
