@@ -2,9 +2,10 @@
 """
 Podcast Review Draft Builder
 
-Reads a raw ASR transcript, applies speaker mapping and ASR corrections,
-inserts chapter headers from an outline, and generates a review draft
-with a questions list for human review.
+Reads a raw ASR transcript, applies speaker mapping and confirmed exact
+corrections, inserts chapter headers from a chapters JSON file, and writes a
+structured review draft. Contextual outline review and the questions list are
+added by the agent after this deterministic step.
 
 Usage:
     python build_review.py \
@@ -29,25 +30,39 @@ import json
 import os
 import re
 import sys
-from datetime import datetime
 
 
 def load_speaker_map(speaker_map_str: str) -> dict:
-    """Load speaker mapping from JSON string."""
+    """Load and validate a JSON speaker mapping."""
     if not speaker_map_str:
         return {}
-    return json.loads(speaker_map_str)
+    data = json.loads(speaker_map_str)
+    if not isinstance(data, dict) or not all(
+        isinstance(old, str) and isinstance(new, str) for old, new in data.items()
+    ):
+        raise ValueError("--speaker-map must be a JSON object with string keys and values")
+    return data
+
+
+def load_pair_list(path: str, label: str) -> list:
+    """Load a JSON array of two-string pairs."""
+    if not path or not os.path.exists(path):
+        return []
+    with open(path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    if not isinstance(data, list) or not all(
+        isinstance(item, list)
+        and len(item) == 2
+        and all(isinstance(value, str) for value in item)
+        for item in data
+    ):
+        raise ValueError(f"{label} must be a JSON array of two-string pairs")
+    return data
 
 
 def load_corrections(corrections_path: str) -> list:
-    """Load ASR corrections from a JSON file.
-    
-    Expected format: [["old1", "new1"], ["old2", "new2"], ...]
-    """
-    if not corrections_path or not os.path.exists(corrections_path):
-        return []
-    with open(corrections_path, "r", encoding="utf-8") as f:
-        return json.load(f)
+    """Load confirmed [old, new] ASR correction pairs."""
+    return load_pair_list(corrections_path, "Corrections")
 
 
 def apply_speaker_mapping(text: str, speaker_map: dict) -> str:
@@ -166,7 +181,7 @@ def build_markdown(ep_id: str, title: str, description: str,
     
     # Hosts
     if hosts:
-        md.append("## 本期主播")
+        md.append("## 本期发言人")
         md.append("")
         for h in hosts:
             md.append(f"- {h}")
@@ -238,13 +253,16 @@ def main():
         raw_text = f.read()
     
     # Load speaker map
-    speaker_map = load_speaker_map(args.speaker_map)
+    try:
+        speaker_map = load_speaker_map(args.speaker_map)
+    except (json.JSONDecodeError, ValueError) as exc:
+        parser.error(f"Invalid speaker map: {exc}")
     speaker_names = list(speaker_map.values()) if speaker_map else []
     
     # If no speaker names provided, try to auto-detect
     if not speaker_names:
         # Look for patterns like "发言人1", "发言人2", etc.
-        found = set(re.findall(r'发言人\d+', raw_text))
+        found = sorted(set(re.findall(r'发言人\d+', raw_text)))
         speaker_names = list(found)
         # Create default mapping
         for s in found:
@@ -262,35 +280,47 @@ def main():
     text = apply_speaker_mapping(raw_text, speaker_map)
     
     # Apply corrections
-    corrections = load_corrections(args.corrections)
+    try:
+        corrections = load_corrections(args.corrections)
+    except (json.JSONDecodeError, ValueError) as exc:
+        parser.error(f"Invalid corrections file: {exc}")
     text = apply_corrections(text, corrections)
     
     # Parse into blocks
     blocks = parse_transcript(text, speaker_names)
     print(f"Parsed {len(blocks)} speech blocks")
+    if not blocks:
+        print(
+            "Error: no speech blocks were parsed. Check speaker labels, timestamps, and --speaker-map.",
+            file=sys.stderr,
+        )
+        sys.exit(2)
     
     # Load chapters
-    chapters = []
-    if args.chapters and os.path.exists(args.chapters):
-        with open(args.chapters, "r", encoding="utf-8") as f:
-            chapters = json.load(f)
-        chapters = [(c[0], c[1]) for c in chapters]
+    try:
+        chapters = load_pair_list(args.chapters, "Chapters")
+        chapters = sorted(
+            [(timestamp, title) for timestamp, title in chapters],
+            key=lambda chapter: ts_to_seconds(chapter[0]),
+        )
+    except (json.JSONDecodeError, ValueError) as exc:
+        parser.error(f"Invalid chapters file: {exc}")
     
     # Insert chapters
     blocks_with_chapters = insert_chapters(blocks, chapters) if chapters else \
         [("BLOCK", s, t, c) for s, t, c in blocks]
     
-    # Build correction rules description
+    # Describe only transformations that this script actually performed.
     correction_rules = [
-        "发言人已映射为真实姓名。",
-        "已按大纲章节插入标题。",
         "已保留每段原始时间戳，便于回听确认。",
-        "没有把整段口语改写成文章，只做第一轮可读性和术语清理。",
-        "不确定的内容标注 `[⚠️?]` 供人工最终校对。",
-        "BGM 歌词段落已保留，未删除。",
+        "没有把整段口语改写成文章，只做结构化整理。",
     ]
+    if speaker_map:
+        correction_rules.insert(0, "已应用发言人映射。")
+    if chapters:
+        correction_rules.insert(0, f"已插入 {len(chapters)} 个章节标题。")
     if corrections:
-        correction_rules.insert(0, f"已应用 {len(corrections)} 条 ASR 纠错规则。")
+        correction_rules.insert(0, f"已应用 {len(corrections)} 条已确认的 ASR 纠错规则。")
     
     # Build markdown
     title = args.title or f"{args.ep_id} 校对稿"
@@ -310,7 +340,9 @@ def main():
     )
     
     # Save
-    os.makedirs(os.path.dirname(args.output), exist_ok=True)
+    output_parent = os.path.dirname(args.output)
+    if output_parent:
+        os.makedirs(output_parent, exist_ok=True)
     with open(args.output, "w", encoding="utf-8") as f:
         f.write(markdown)
     

@@ -32,7 +32,8 @@ Thumbs.db
 02_normalized_text/
 03_review_draft/
 04_final_text/
-05_agent_chunks/
 manifests/
 glossary/
 outlines/
+.coverage
+.pytest_cache/

@@ -1,174 +1,244 @@
 ---
 name: podcast-proofreader
-description: "Podcast ASR transcript proofreading skill. Transforms raw ASR exports into structured review drafts by cross-referencing show outlines, applying terminology corrections, and flagging uncertain items for human review. Works with any language and any ASR tool (Tongyi Tingwu, Feishu Miaoji, Whisper, etc.). Triggers: proofread episode, 根据大纲校对, 导入播客文本, 生成初校稿, ASR纠错."
-agent_created: true
+description: Podcast transcript review for creators. Turns timestamped DOCX ASR exports into structured Markdown drafts, maps speakers, applies confirmed corrections, inserts chapters, and flags uncertain passages for human review. Optimized for Chinese podcasts. Use for 播客校对、根据大纲校对、导入播客文字稿、生成初校稿、ASR 纠错, or finalizing a reviewed transcript.
+version: 1.0.0
+author: noiseorigin
+license: MIT
+homepage: https://github.com/noiseorigin/podcast-proofreader
+compatibility: Python 3.10+ and Bash; python-docx is required for DOCX imports.
+user-invocable: true
+metadata: {"openclaw":{"emoji":"🎙️","homepage":"https://github.com/noiseorigin/podcast-proofreader"},"hermes":{"tags":["Podcast","ASR","Proofreading"]}}
 ---
 
 # Podcast Proofreader
 
-## Overview
+Help a podcast creator turn a timestamped ASR transcript into a draft that is fast to review and safe to finalize.
 
-Transform raw ASR podcast transcripts into structured, readable review drafts by cross-referencing show outlines, applying domain-specific terminology corrections, and flagging uncertain items for human review.
+The creator should be able to work in natural language. Do not make them manage internal files unless they ask for manual commands.
 
-Works with any ASR tool that exports docx or txt with speaker labels and timestamps (Tongyi Tingwu, Feishu Miaoji, Whisper, etc.), and any language.
+## Current Scope
 
-## When to Use
+Use this workflow for:
 
-- A podcast host provides a docx/txt ASR export and asks to proofread it
-- A user says "根据大纲校对" / "proofread episode XX" / "生成初校稿"
-- A user wants to import a new podcast episode transcript for processing
-- A user provides a document URL (Feishu/Lark/Google Docs) as the show outline and asks to cross-reference
+- DOCX ASR exports with speaker labels and timestamps
+- Local Markdown episode outlines
+- Speaker-name mapping
+- Confirmed exact replacements
+- Timestamp-based chapter insertion
+- Contextual review and a human-verification list
+- Final Markdown transcripts after confirmation
 
-## Prerequisites
+## Resolve the Skill Directory
 
-### Environment
+Before running a bundled script, determine the directory containing this `SKILL.md`. Call it `SKILL_DIR`.
 
-- Python 3.10+ with `python-docx` installed (`pip install python-docx`)
-- `lark-cli` configured (only if outlines are on Feishu/Lark)
+Resolve every bundled path against `SKILL_DIR`, not against the creator's transcript workspace. For example:
 
-### Directory Structure
-
-Each podcast project should follow this structure (adaptable):
-
-```
-project-root/
-├── 00_inbox/              Raw ASR exports (docx/txt) land here
-├── 01_raw_docx/           Copied raw files, organized by episode
-├── 02_normalized_text/    Extracted plain text
-├── 03_review_draft/       AI-proofread drafts with questions
-├── 04_final_text/         Human-reviewed final transcripts
-├── 05_agent_chunks/       Knowledge base chunks (optional)
-├── outlines/              Show outlines, timelines, terminology
-├── glossary/              Confirmed terms (accumulates across episodes)
-├── manifests/             Per-episode processing state (JSON)
-├── imports/               SRT/VTT import intermediates
-├── tools/                 Automation scripts
-├── corrections.json       ASR correction rules (cross-episode)
-└── chapters.json          Chapter definitions (cross-episode)
+```bash
+python3 "$SKILL_DIR/scripts/import_docx.py" --help
 ```
 
-> **Tip**: Run `./init_project.sh /path/to/project` from the repo root to scaffold this entire structure automatically, complete with template files.
+Never assume the current working directory is the Skill directory.
+
+## Prerequisite Check
+
+DOCX import requires Python 3.10+ and `python-docx`.
+
+Check with:
+
+```bash
+python3 -c "import docx"
+```
+
+If it is missing, explain the requirement and ask before running:
+
+```bash
+python3 -m pip install python-docx
+```
+
+## Creator-First Interaction
+
+When the creator asks to review an episode:
+
+1. Locate the DOCX transcript.
+2. Determine the episode ID, such as `ep042`.
+3. Locate the local Markdown outline if one is available.
+4. Ask only for information that cannot be inferred safely, especially speaker identities.
+5. Run the mechanical steps yourself.
+6. Present the review draft and its questions, not a long implementation log.
+
+Never invent a speaker name, proper noun, number, quotation, or factual claim.
+
+## Workspace Setup
+
+If the creator does not have a workspace, run:
+
+```bash
+bash "$SKILL_DIR/init_project.sh" /path/to/PodcastTranscripts
+```
+
+The supported workspace is:
+
+```text
+PodcastTranscripts/
+├── 00_inbox/
+├── 01_raw_docx/
+├── 02_normalized_text/
+├── 03_review_draft/
+├── 04_final_text/
+├── outlines/
+├── glossary/
+├── manifests/
+├── corrections.json
+└── chapters.json
+```
 
 ## Workflow
 
-### Phase 1: Import
+### Phase 1: Import the DOCX
 
-When a user provides a file in `00_inbox/` or a file path:
-
-1. Copy the raw file to `01_raw_docx/epXXX/`.
-2. Extract text to `02_normalized_text/epXXX/epXXX.raw.txt` using `scripts/import_docx.py`.
-3. Create a manifest at `manifests/epXXX.json` with initial status flags.
+Run from the transcript workspace:
 
 ```bash
-python scripts/import_docx.py \
+python3 "$SKILL_DIR/scripts/import_docx.py" \
   --input "00_inbox/episode.docx" \
   --ep-id ep042 \
   --output-dir 02_normalized_text \
   --raw-dir 01_raw_docx \
-  --manifest-dir manifests
+  --manifest-dir manifests \
+  --title "Episode title"
 ```
 
-### Phase 2: Fetch Outline
+Verify that these files exist:
 
-If the user provides a Feishu/Lark doc URL as the outline:
+- `01_raw_docx/ep042/<source-file>.docx`
+- `02_normalized_text/ep042/ep042.raw.txt`
+- `manifests/ep042.json`
 
-1. Switch to the appropriate lark-cli profile if needed.
-2. Fetch the document: `lark-cli docs +fetch --doc "<URL>" --doc-format markdown`.
-3. Save to `outlines/epXXX.outline.md`.
-4. Switch back to the default profile.
+Do not modify the archived DOCX or normalized raw text after import.
 
-If the outline is a local file, read it directly.
+### Phase 2: Read the Outline
 
-### Phase 3: ASR Correction & Review Draft Generation
+Read the local outline before building the draft.
 
-This is the core phase. Use `scripts/build_review.py`:
+Use it to identify:
 
-1. **Read** the raw text and the outline.
-2. **Identify speakers** by scanning the first few minutes for self-introductions. Map `发言人N` / `Speaker N` to real names.
-3. **Apply corrections** based on:
-   - The podcast's glossary (accumulated in `glossary/`).
-   - Common ASR error patterns (see `references/asr_patterns.md`).
-   - Domain-specific terminology from the outline.
-4. **Insert chapter headers** by mapping outline sections to timestamps.
-5. **Flag uncertain items** in a `## 疑点清单` section at the end.
-6. **Write** the review draft to `03_review_draft/epXXX/epXXX.review.md`.
-7. **Update** the manifest: `ai_review_draft = true`.
+- likely speaker names;
+- confirmed spelling of names, brands, and technical terms;
+- chapter titles and timestamps;
+- claims or quotations that need careful verification.
+
+The Python script records the outline path but does not understand the outline semantically. Outline comparison is the agent's responsibility.
+
+If speaker identities are unclear, ask the creator. Do not guess.
+
+### Phase 3: Prepare Mechanical Rules
+
+Use `corrections.json` only for exact replacements that are already confirmed:
+
+```json
+[
+  ["Open AI", "OpenAI"],
+  ["Chat G P T", "ChatGPT"]
+]
+```
+
+Use `chapters.json` for timestamp/title pairs:
+
+```json
+[
+  ["00:00", "开场"],
+  ["04:30", "嘉宾经历"]
+]
+```
+
+Context-dependent or uncertain corrections belong in the questions list, not in `corrections.json`.
+
+### Phase 4: Build the Structured Draft
 
 ```bash
-python scripts/build_review.py \
+python3 "$SKILL_DIR/scripts/build_review.py" \
   --raw 02_normalized_text/ep042/ep042.raw.txt \
   --outline outlines/ep042.outline.md \
   --output 03_review_draft/ep042/ep042.review.md \
   --ep-id ep042 \
-  --speaker-map '{"发言人1": "GuestName", "发言人2": "Host1", "发言人3": "Host2"}' \
+  --speaker-map '{"发言人1":"嘉宾","发言人2":"主播"}' \
   --corrections corrections.json \
   --chapters chapters.json \
-  --title "Episode Title"
+  --title "Episode title"
 ```
 
-### Phase 4: Human Review
+Verify that speech blocks were parsed. If the script reports zero blocks, check the speaker labels, timestamps, and speaker map before continuing.
 
-Present the review draft to the user. The `## 疑点清单` section lists all uncertain items needing human confirmation.
+### Phase 5: Perform Contextual Review
 
-### Phase 5: Finalize (after human confirmation)
+Read the entire draft and compare it with the outline.
 
-1. Update the review draft with confirmed terms.
-2. Write confirmed terms to `glossary/epXXX_confirmed_terms.md`.
-3. Generate final transcript at `04_final_text/epXXX/epXXX.final.md`.
-4. Update manifest: `human_final_review = true`.
+Review especially:
 
-## ASR Correction Strategy
+- inconsistent names or titles;
+- unfamiliar proper nouns and brands;
+- suspicious numbers, dates, URLs, and negation;
+- broken grammar that may indicate ASR corruption;
+- abrupt topic changes;
+- factual, legal, medical, or financial claims that should not be silently rewritten.
 
-Corrections are applied in order of confidence:
+Apply only high-confidence corrections. Mark uncertain text with `[⚠️?]` and append:
 
-1. **Speaker names**: Map `发言人1/2/3` to real names from self-introductions.
-2. **High-confidence replacements**: Exact string matches with no ambiguity.
-3. **Context-dependent corrections**: Replacements depending on surrounding text.
-4. **Uncertain items**: Flagged in the questions list, not auto-corrected.
+```markdown
+---
 
-For detailed ASR error patterns, see `references/asr_patterns.md`.
+## 疑点清单
 
-## Glossary Management
+### 1. [类别] 简短标题
+- 时间戳：00:12:34
+- 原文：……
+- 疑点：……
+- 请确认：……
+```
 
-- Terms confirmed in one episode are automatically applied to future episodes.
-- Each episode's confirmed terms are saved as `glossary/epXXX_confirmed_terms.md`.
-- Cross-episode accumulation improves accuracy over time.
+Every question must carry a timestamp and a short transcript excerpt for replay.
 
-## Conservation & Safety
+After this review is complete, update `manifests/ep042.json`:
 
-When transcript content involves:
-- Wild plant/animal protection
-- Illegal collection / poaching
-- Conservation status / protected species
-- Regulatory compliance
+- `status.ai_review_draft = true`
+- `outputs.review_draft` points to the review file
+- record the number of unresolved questions when practical
 
-Apply conservative treatment: do not enhance, rewrite, or embellish facts. Preserve original meaning and flag for human review.
+### Phase 6: Human Confirmation
 
-## Resources
+Present the questions list to the creator. Do not create a final transcript while unresolved questions remain unless the creator explicitly asks to preserve them.
 
-### scripts/
-- `import_docx.py` - Extract text from docx ASR exports
-- `build_review.py` - Build review draft from raw text + outline
+### Phase 7: Finalize
 
-### template/
-- `sample_outline.md` - Outline format reference
-- `glossary_template.md` - Glossary file format guide
-- `corrections_empty.json` - Empty corrections template (ready to fill)
-- `chapters_empty.json` - Empty chapters template (ready to fill)
-- `manifest_template.json` - Per-episode manifest template
+After the creator confirms the questions:
 
-### references/
-- `asr_patterns.md` - Common ASR error patterns and correction strategies
+1. Apply the confirmed answers to the review draft.
+2. Save confirmed episode terminology to `glossary/ep042_confirmed_terms.md`.
+3. Write `04_final_text/ep042/ep042.final.md`.
+4. Remove review-only markers that have been resolved.
+5. Update `manifests/ep042.json`:
+   - `status.human_final_review = true`
+   - `outputs.final_text` points to the final file
 
-### assets/
-- `manifest_template.json` - Template for per-episode manifest files
+Do not overwrite the raw transcript or the first review draft without explicit permission.
 
-### examples/
-- `corrections.json` - Sample ASR correction rules (21 rules)
-- `chapters.json` - Sample chapter definitions (9 chapters)
-- `speaker_map.json` - Sample speaker mapping
-- `CLAUDE.md` - Ready-to-use Claude Code project instructions
-- `AGENTS.md` - Ready-to-use Codex / OpenAI project instructions
+## Review Principles
 
-### Root
-- `init_project.sh` - One-command project scaffold (creates dirs + copies templates)
+1. Preserve meaning before improving style.
+2. Correct only confirmed or unambiguous errors automatically.
+3. Keep timestamps intact.
+4. Flag uncertainty instead of guessing.
+5. Treat previous glossary entries as references, not universal truth.
+6. Require human confirmation before finalization.
+
+## Bundled Resources
+
+- `scripts/import_docx.py` — extract DOCX text, archive the source, and create a manifest
+- `scripts/build_review.py` — map speakers, apply exact corrections, insert chapters, and write the structured draft
+- `references/asr_patterns.md` — generic Chinese podcast ASR review patterns
+- `template/sample_outline.md` — local outline example
+- `template/corrections_empty.json` — empty correction rules
+- `template/chapters_empty.json` — empty chapter definitions
+- `template/glossary_template.md` — confirmed-term format
+- `template/manifest_template.json` — episode status schema

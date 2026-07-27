@@ -21,12 +21,9 @@ DIRS=(
   "02_normalized_text"
   "03_review_draft"
   "04_final_text"
-  "05_agent_chunks"
   "outlines"
   "glossary"
   "manifests"
-  "imports"
-  "tools"
 )
 
 echo "Creating podcast transcript project at: $(cd "$TARGET_DIR" 2>/dev/null && pwd || echo "$TARGET_DIR")"
@@ -45,8 +42,12 @@ copy_template() {
   local src="$SCRIPT_DIR/template/$1"
   local dst="$TARGET_DIR/$2"
   if [[ -f "$src" ]]; then
-    cp "$src" "$dst"
-    echo "  [file] $2"
+    if [[ -e "$dst" ]]; then
+      echo "  [keep] $2"
+    else
+      cp "$src" "$dst"
+      echo "  [file] $2"
+    fi
   fi
 }
 
@@ -73,11 +74,10 @@ echo ""
 echo "Next steps:"
 echo "  1. Drop your ASR export (.docx) into 00_inbox/"
 echo "  2. Write your show outline in outlines/ (see sample_outline.md)"
-echo "  3. Add speaker names and corrections to corrections.json"
-echo "  4. Run: python ../podcast-proofreader/scripts/import_docx.py \\"
-echo "         --input 00_inbox/your_episode.docx --ep-id ep001 \\"
-echo "         --output-dir 02_normalized_text --raw-dir 01_raw_docx"
-echo "  5. Run: python ../podcast-proofreader/scripts/build_review.py \\"
-echo "         --raw 02_normalized_text/ep001/ep001.raw.txt \\"
-echo "         --output 03_review_draft/ep001/ep001.review.md \\"
-echo "         --ep-id ep001 --corrections corrections.json"
+echo "  3. Ask your agent to import and review the episode"
+echo ""
+echo "Manual import command:"
+echo "  python3 $SCRIPT_DIR/scripts/import_docx.py \\"
+echo "    --input 00_inbox/your_episode.docx --ep-id ep001 \\"
+echo "    --output-dir 02_normalized_text --raw-dir 01_raw_docx \\"
+echo "    --manifest-dir manifests"

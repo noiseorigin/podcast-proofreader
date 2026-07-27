@@ -26,7 +26,10 @@ def extract_text_from_docx(docx_path: str) -> str:
     try:
         import docx
     except ImportError:
-        print("Error: python-docx not installed. Install with: pip install python-docx", file=sys.stderr)
+        print(
+            f"Error: python-docx is not installed. Run: {sys.executable} -m pip install python-docx",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     doc = docx.Document(docx_path)
@@ -42,7 +45,7 @@ def create_manifest(ep_id: str, title: str, source_path: str,
 
     manifest = {
         "episode_id": ep_id,
-        "episode_number": int(ep_id.replace("ep", "")),
+        "episode_number": int(ep_id[2:]) if ep_id.lower().startswith("ep") and ep_id[2:].isdigit() else None,
         "title": title,
         "source": {
             "type": "asr_export",
@@ -51,16 +54,21 @@ def create_manifest(ep_id: str, title: str, source_path: str,
             "normalized_text": normalized_path
         },
         "status": {
-            "raw_docx_copied": True,
+            "raw_docx_copied": bool(raw_docx_path),
             "text_extracted": True,
             "ai_review_draft": False,
-            "human_final_review": False,
-            "agent_chunks_exported": False
+            "human_final_review": False
         },
         "notes": f"Imported on {datetime.now().strftime('%Y-%m-%d %H:%M')}",
-        "outputs": {},
-        "proofreading": {},
-        "knowledge_base": {}
+        "outputs": {
+            "review_draft": "",
+            "final_text": ""
+        },
+        "proofreading": {
+            "unresolved_questions": 0,
+            "resolved_questions": 0,
+            "confirmed_terms_path": ""
+        }
     }
 
     os.makedirs(manifest_dir, exist_ok=True)
@@ -76,8 +84,8 @@ def main():
     parser.add_argument("--ep-id", required=True, help="Episode ID, e.g. ep042")
     parser.add_argument("--output-dir", default="02_normalized_text",
                         help="Output directory for normalized text")
-    parser.add_argument("--raw-dir", default=None,
-                        help="Directory to copy raw docx (e.g. 01_raw_docx). Skip if not provided.")
+    parser.add_argument("--raw-dir", default="01_raw_docx",
+                        help="Directory to archive the source docx (default: 01_raw_docx)")
     parser.add_argument("--manifest-dir", default="manifests",
                         help="Directory for manifest files")
     parser.add_argument("--title", default="", help="Episode title (optional)")
@@ -86,6 +94,11 @@ def main():
 
     input_path = os.path.abspath(args.input)
     ep_id = args.ep_id
+
+    if not os.path.isfile(input_path):
+        parser.error(f"Input file not found: {input_path}")
+    if not input_path.lower().endswith(".docx"):
+        parser.error("Input must be a .docx file")
 
     # Extract text
     print(f"Extracting text from: {input_path}")
