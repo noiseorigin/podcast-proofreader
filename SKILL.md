@@ -41,8 +41,13 @@ project-root/
 ├── outlines/              Show outlines, timelines, terminology
 ├── glossary/              Confirmed terms (accumulates across episodes)
 ├── manifests/             Per-episode processing state (JSON)
-└── tools/                 Automation scripts
+├── imports/               SRT/VTT import intermediates
+├── tools/                 Automation scripts
+├── corrections.json       ASR correction rules (cross-episode)
+└── chapters.json          Chapter definitions (cross-episode)
 ```
+
+> **Tip**: Run `./init_project.sh /path/to/project` from the repo root to scaffold this entire structure automatically, complete with template files.
 
 ## Workflow
 
@@ -145,6 +150,13 @@ Apply conservative treatment: do not enhance, rewrite, or embellish facts. Prese
 - `import_docx.py` - Extract text from docx ASR exports
 - `build_review.py` - Build review draft from raw text + outline
 
+### template/
+- `sample_outline.md` - Outline format reference
+- `glossary_template.md` - Glossary file format guide
+- `corrections_empty.json` - Empty corrections template (ready to fill)
+- `chapters_empty.json` - Empty chapters template (ready to fill)
+- `manifest_template.json` - Per-episode manifest template
+
 ### references/
 - `asr_patterns.md` - Common ASR error patterns and correction strategies
 
@@ -152,6 +164,9 @@ Apply conservative treatment: do not enhance, rewrite, or embellish facts. Prese
 - `manifest_template.json` - Template for per-episode manifest files
 
 ### examples/
-- `corrections.json` - Sample ASR correction rules
-- `chapters.json` - Sample chapter definitions
+- `corrections.json` - Sample ASR correction rules (21 rules)
+- `chapters.json` - Sample chapter definitions (9 chapters)
 - `speaker_map.json` - Sample speaker mapping
+
+### Root
+- `init_project.sh` - One-command project scaffold (creates dirs + copies templates)
