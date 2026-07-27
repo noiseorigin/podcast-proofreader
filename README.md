@@ -37,29 +37,36 @@
 ### 方式二：命令行直接使用
 
 ```bash
-git clone https://github.com/your-username/podcast-proofreader.git
+git clone https://github.com/noiseorigin/podcast-proofreader.git
 cd podcast-proofreader
 pip install python-docx
 
-# Step 1: 导入 docx 转写稿
-python scripts/import_docx.py \
-  --input ~/Downloads/episode042.docx \
+# Step 0: 初始化播客项目目录（创建 00_inbox ~ 05_agent_chunks 等目录 + 空模板文件）
+./init_project.sh ~/my-podcast-transcripts
+cd ~/my-podcast-transcripts
+
+# Step 1: 把 ASR 导出的 docx 放进收件箱
+cp ~/Downloads/episode042.docx 00_inbox/
+
+# Step 2: 导入并提取文本
+python /path/to/podcast-proofreader/scripts/import_docx.py \
+  --input 00_inbox/episode042.docx \
   --ep-id ep042 \
   --output-dir 02_normalized_text \
   --raw-dir 01_raw_docx \
   --manifest-dir manifests
 
-# Step 2: 准备发言人映射和纠错规则（参考 examples/ 目录）
+# Step 3: 编写大纲（参考 outlines/sample_outline.md）和纠错规则（编辑 corrections.json）
 
-# Step 3: 生成初校稿
-python scripts/build_review.py \
+# Step 4: 生成初校稿
+python /path/to/podcast-proofreader/scripts/build_review.py \
   --raw 02_normalized_text/ep042/ep042.raw.txt \
   --outline outlines/ep042.outline.md \
   --output 03_review_draft/ep042/ep042.review.md \
   --ep-id ep042 \
   --speaker-map '{"发言人1": "嘉宾名", "发言人2": "主播A", "发言人3": "主播B"}' \
-  --corrections examples/corrections.json \
-  --chapters examples/chapters.json \
+  --corrections corrections.json \
+  --chapters chapters.json \
   --title "Vol.42 节目标题"
 ```
 
@@ -150,7 +157,7 @@ python scripts/build_review.py \
 
 ## 项目目录结构
 
-建议按以下结构组织你的播客文本项目：
+运行 `./init_project.sh` 会自动创建以下结构：
 
 ```
 my-podcast-transcripts/
@@ -161,10 +168,40 @@ my-podcast-transcripts/
 ├── 04_final_text/         # 人工终审稿
 ├── 05_agent_chunks/       # 知识库切片（可选）
 ├── outlines/              # 节目大纲、时间轴
+│   └── sample_outline.md  # 大纲格式参考（init 自动生成）
 ├── glossary/              # 已确认术语（跨期累积）
+│   └── README.md          # 术语文件格式说明（init 自动生成）
 ├── manifests/             # 每期处理状态 JSON
-├── corrections.json       # 你的纠错规则（跨期复用）
-└── chapters/              # 章节定义（跨期复用）
+├── imports/               # SRT/VTT 等导入中间文件
+├── tools/                 自定义自动化脚本
+├── corrections.json       # 你的纠错规则（init 自动创建空模板）
+└── chapters.json          # 章节定义（init 自动创建空模板）
+```
+
+### 本仓库自身的目录结构
+
+```
+podcast-proofreader/
+├── init_project.sh        # 项目初始化脚本（一键创建目录 + 模板）
+├── scripts/               # 核心处理脚本
+│   ├── import_docx.py     # docx 导入与文本提取
+│   └── build_review.py    # 初校稿生成
+├── template/              # 项目模板文件（init_project.sh 会复制这些）
+│   ├── sample_outline.md      # 大纲格式参考
+│   ├── glossary_template.md   # 术语表格式说明
+│   ├── corrections_empty.json # 空纠错规则模板
+│   ├── chapters_empty.json    # 空章节定义模板
+│   └── manifest_template.json # 每期状态 JSON 模板
+├── examples/              # 带数据的示例（参考用）
+│   ├── corrections.json      # 21 条示例纠错规则
+│   ├── chapters.json         # 9 章示例章节定义
+│   └── speaker_map.json      # 发言人映射示例
+├── references/            # 参考文档
+│   └── asr_patterns.md       # ASR 常见错听模式
+├── assets/                # Skill 资产
+│   └── manifest_template.json
+├── SKILL.md               # WorkBuddy Skill 定义
+└── README.md              # 本文件
 ```
 
 ## ASR 纠错策略
