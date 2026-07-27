@@ -70,6 +70,127 @@ python /path/to/podcast-proofreader/scripts/build_review.py \
   --title "Vol.42 节目标题"
 ```
 
+### 方式三：在 AI 编程助手中使用
+
+本工具的设计天然适配 AI 编程助手（Claude Code、Codex、Pi 等）。脚本处理机械性工作（文本提取、字符串替换、章节插入），AI 助手处理需要理解力的工作（发言人识别、语境纠错、疑点清单生成、终稿润色）。
+
+#### Claude Code
+
+Claude Code 读取项目根目录的 `CLAUDE.md` 作为上下文指令。在播客项目目录中创建：
+
+```bash
+cd ~/my-podcast-transcripts
+
+# 克隆工具（如果还没有）
+git clone https://github.com/noiseorigin/podcast-proofreader.git ../podcast-proofreader
+
+# 初始化项目
+../podcast-proofreader/init_project.sh .
+
+# 创建 CLAUDE.md
+cat > CLAUDE.md << 'EOF'
+# Podcast Transcript Proofreading
+
+本项目是播客文字稿校对工作区。
+
+## 工作流
+
+1. ASR 导出的 docx 放入 00_inbox/
+2. 运行 ../podcast-proofreader/scripts/import_docx.py 导入
+3. 读取 outlines/ 中的大纲，识别发言人和术语
+4. 运行 ../podcast-proofreader/scripts/build_review.py 生成初校稿
+5. 扫描全文生成疑点清单，追加到初校稿末尾
+6. 等待人工确认疑点后生成终稿
+
+## 关键规则
+
+- 发言人编号（发言人1/2/3）需映射为真实姓名，从开场自我介绍识别
+- ASR 错听按 corrections.json 批量替换
+- 不确定的内容标注 [⚠️?] 并列入疑点清单
+- 涉及保育/保护物种内容不改写、不增强
+- 术语跨期累积，写入 glossary/epXXX_confirmed_terms.md
+
+## 参考文档
+
+- ASR 错听模式: ../podcast-proofreader/references/asr_patterns.md
+- 纠错示例: ../podcast-proofreader/examples/corrections.json
+EOF
+```
+
+然后在 Claude Code 中直接对话：
+
+```
+> 把 00_inbox 里的 vol42 导入并根据 outlines/ep042.outline.md 校对
+> 列出 ep042 的疑点清单
+> 这些疑点我确认了，继续生成终稿
+```
+
+#### Codex (OpenAI)
+
+Codex 读取项目根目录的 `AGENTS.md`。工作流与 Claude Code 一致，只需创建对应的指令文件：
+
+```bash
+cat > AGENTS.md << 'EOF'
+# Agent Operating Guide
+
+## 目标
+用自然语言推进播客文字稿校对工作。
+
+## 工具路径
+- 导入脚本: ../podcast-proofreader/scripts/import_docx.py
+- 校对脚本: ../podcast-proofreader/scripts/build_review.py
+- ASR 错听参考: ../podcast-proofreader/references/asr_patterns.md
+
+## 流程
+1. 导入: 读取 00_inbox/ 中的 docx，运行 import_docx.py 提取文本
+2. 校对: 读取大纲，识别发言人，应用 corrections.json 纠错，运行 build_review.py
+3. 疑点: 扫描全文，生成疑点清单追加到初校稿
+4. 终稿: 人工确认疑点后，更新初校稿生成终稿到 04_final_text/
+
+## 规则
+- 发言人映射从开场自我介绍识别
+- 不确定内容标注 [⚠️?] 不自动替换
+- 保育相关内容保守处理
+- 术语跨期累积到 glossary/
+EOF
+```
+
+在 Codex 中用自然语言驱动即可，例如「导入 ep042 并校对」。
+
+#### Pi / 其他 AI 助手
+
+对于 Pi、Cursor、Windsurf 等其他支持文件读写和命令执行的 AI 编程助手，核心思路相同：
+
+1. **将工具脚本放在项目可访问的路径**（如 `../podcast-proofreader/scripts/`）
+2. **在项目根目录放置指令文件**，说明工作流和规则
+3. **用自然语言驱动**，让 AI 助手调用脚本并处理需要理解的任务
+
+通用指令模板（适用于任何 AI 助手）：
+
+```markdown
+# 播客校对工作流
+
+## 可用脚本
+- python ../podcast-proofreader/scripts/import_docx.py --input <docx> --ep-id epXXX
+- python ../podcast-proofreader/scripts/build_review.py --raw <txt> --output <md> --ep-id epXXX
+
+## 步骤
+1. 导入: docx → 02_normalized_text/epXXX/epXXX.raw.txt
+2. 校对: 读取大纲 → 识别发言人 → 应用纠错 → 插入章节 → 生成初校稿
+3. 疑点: 扫描不确定内容 → 追加到初校稿的 ## 疑点清单
+4. 终稿: 人工确认后 → 生成 04_final_text/epXXX/epXXX.final.md
+
+## 规则
+- 发言人编号映射为真实姓名
+- corrections.json 中的规则做批量替换
+- 不确定内容标注 [⚠️?]
+- 保育内容不改写
+```
+
+> **提示**: 无论使用哪个 AI 助手，关键分工是——脚本负责文本提取和机械替换，AI 负责语境理解、发言人识别和疑点判断。参考 `references/asr_patterns.md` 可以帮助 AI 更好地识别 ASR 错听。
+>
+> **开箱即用**: `examples/` 目录提供了 `CLAUDE.md` 和 `AGENTS.md` 模板，可直接复制到你的播客项目根目录使用。
+
 ## 输入要求
 
 ### 必需
@@ -192,10 +313,12 @@ podcast-proofreader/
 │   ├── corrections_empty.json # 空纠错规则模板
 │   ├── chapters_empty.json    # 空章节定义模板
 │   └── manifest_template.json # 每期状态 JSON 模板
-├── examples/              # 带数据的示例（参考用）
+├── examples/              # 带数据的示例 + AI 助手指令模板
 │   ├── corrections.json      # 21 条示例纠错规则
 │   ├── chapters.json         # 9 章示例章节定义
-│   └── speaker_map.json      # 发言人映射示例
+│   ├── speaker_map.json      # 发言人映射示例
+│   ├── CLAUDE.md             # Claude Code 项目指令模板
+│   └── AGENTS.md             # Codex / OpenAI 项目指令模板
 ├── references/            # 参考文档
 │   └── asr_patterns.md       # ASR 常见错听模式
 ├── assets/                # Skill 资产
