@@ -1,0 +1,4 @@
+interface:
+  display_name: "播客文字稿校对"
+  short_description: "将播客转写稿生成剪辑校对稿、最终文字稿、时间轴与检索切片"
+  default_prompt: "使用 $podcast-proofreader 导入这期播客转写稿和大纲，生成可交给剪辑师确认的校对稿。"

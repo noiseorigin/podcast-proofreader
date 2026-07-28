@@ -1,0 +1,10 @@
+{
+  "answers": {
+    "Q001": {
+      "action": "accept"
+    },
+    "Q002": {
+      "action": "keep"
+    }
+  }
+}

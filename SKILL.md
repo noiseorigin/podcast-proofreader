@@ -1,244 +1,149 @@
 ---
 name: podcast-proofreader
-description: Podcast transcript review for creators. Turns timestamped DOCX ASR exports into structured Markdown drafts, maps speakers, applies confirmed corrections, inserts chapters, and flags uncertain passages for human review. Optimized for Chinese podcasts. Use for 播客校对、根据大纲校对、导入播客文字稿、生成初校稿、ASR 纠错, or finalizing a reviewed transcript.
-version: 1.0.0
-author: noiseorigin
+description: 将播客 ASR 转写稿整理为结构化初校、语义疑点、剪辑校对稿和最终文字稿。用户要求导入或校对播客文稿、根据大纲纠错、识别发言人、生成疑点清单、登记人工确认、生成时间轴或知识库切片时使用；支持 DOCX、TXT、Markdown、SRT、VTT。
 license: MIT
-homepage: https://github.com/noiseorigin/podcast-proofreader
-compatibility: Python 3.10+ and Bash; python-docx is required for DOCX imports.
-user-invocable: true
-metadata: {"openclaw":{"emoji":"🎙️","homepage":"https://github.com/noiseorigin/podcast-proofreader"},"hermes":{"tags":["Podcast","ASR","Proofreading"]}}
+metadata:
+  version: "1.1.0"
+  author: noiseorigin
+  homepage: https://github.com/noiseorigin/podcast-proofreader
+  compatibility: Python 3.10+；推荐流程不需要第三方 Python 依赖
+  user-invocable: true
+  openclaw:
+    emoji: "🎙️"
+    homepage: https://github.com/noiseorigin/podcast-proofreader
+  hermes:
+    tags:
+      - Podcast
+      - ASR
+      - Proofreading
 ---
 
 # Podcast Proofreader
 
-Help a podcast creator turn a timestamped ASR transcript into a draft that is fast to review and safe to finalize.
+先确定本 `SKILL.md` 所在目录并记为 `SKILL_DIR`。所有内置脚本都从
+`SKILL_DIR` 解析，不假设当前目录就是 Skill 目录。项目目录可以位于任意位置。
 
-The creator should be able to work in natural language. Do not make them manage internal files unless they ask for manual commands.
+需要字段、JSON 示例或状态定义时，先读
+[`references/contracts.md`](references/contracts.md)。
 
-## Current Scope
+## 开工前检查
 
-Use this workflow for:
-
-- DOCX ASR exports with speaker labels and timestamps
-- Local Markdown episode outlines
-- Speaker-name mapping
-- Confirmed exact replacements
-- Timestamp-based chapter insertion
-- Contextual review and a human-verification list
-- Final Markdown transcripts after confirmation
-
-## Resolve the Skill Directory
-
-Before running a bundled script, determine the directory containing this `SKILL.md`. Call it `SKILL_DIR`.
-
-Resolve every bundled path against `SKILL_DIR`, not against the creator's transcript workspace. For example:
+首次运行先执行：
 
 ```bash
-python3 "$SKILL_DIR/scripts/import_docx.py" --help
+python3 "$SKILL_DIR/scripts/podcast_proofreader.py" doctor
 ```
 
-Never assume the current working directory is the Skill directory.
+开始处理前确认：
 
-## Prerequisite Check
+- 转写稿存在、非空且格式受支持。
+- 期号明确；用户未提供但文件名含义明确时，可使用不带扩展名的文件名。
+- 项目目录可写；尚未初始化时先执行 `init`。
+- 音频、转写稿和大纲属于同一期、同一版本。
+- 发言人映射和确定性纠错只包含已经确认的内容。
 
-DOCX import requires Python 3.10+ and `python-docx`.
+转写稿缺失或无法读取时停止并请用户补充。其他可选材料缺失时可以继续，但要
+告知影响：无大纲时使用文件名和“全文”章节；无音频时不能直接回听；无发言人
+映射时生成身份疑点；无总时长时最后一章结束时间未知。不要要求用户预先编写
+`agent-review.json` 或 `answers.json`。
 
-Check with:
+## 工作流
 
-```bash
-python3 -c "import docx"
-```
-
-If it is missing, explain the requirement and ask before running:
-
-```bash
-python3 -m pip install python-docx
-```
-
-## Creator-First Interaction
-
-When the creator asks to review an episode:
-
-1. Locate the DOCX transcript.
-2. Determine the episode ID, such as `ep042`.
-3. Locate the local Markdown outline if one is available.
-4. Ask only for information that cannot be inferred safely, especially speaker identities.
-5. Run the mechanical steps yourself.
-6. Present the review draft and its questions, not a long implementation log.
-
-Never invent a speaker name, proper noun, number, quotation, or factual claim.
-
-## Workspace Setup
-
-If the creator does not have a workspace, run:
-
-```bash
-bash "$SKILL_DIR/init_project.sh" /path/to/PodcastTranscripts
-```
-
-The supported workspace is:
+严格按以下顺序执行：
 
 ```text
-PodcastTranscripts/
-├── 00_inbox/
-├── 01_raw_docx/
-├── 02_normalized_text/
-├── 03_review_draft/
-├── 04_final_text/
-├── outlines/
-├── glossary/
-├── manifests/
-├── corrections.json
-└── chapters.json
+init → prepare → agent-review → resolve → finalize
 ```
 
-## Workflow
-
-### Phase 1: Import the DOCX
-
-Run from the transcript workspace:
+### 1. 初始化
 
 ```bash
-python3 "$SKILL_DIR/scripts/import_docx.py" \
-  --input "00_inbox/episode.docx" \
-  --ep-id ep042 \
-  --output-dir 02_normalized_text \
-  --raw-dir 01_raw_docx \
-  --manifest-dir manifests \
-  --title "Episode title"
+python3 "$SKILL_DIR/scripts/podcast_proofreader.py" init \
+  --project "<项目目录>"
 ```
 
-Verify that these files exist:
+初始化可安全重复执行，不覆盖已有配置。建议把转写稿放入项目的
+`00_inbox/`；按需填写 `speaker_map.json`、`corrections.json` 和大纲。
 
-- `01_raw_docx/ep042/<source-file>.docx`
-- `02_normalized_text/ep042/ep042.raw.txt`
-- `manifests/ep042.json`
+### 2. 准备初校
 
-Do not modify the archived DOCX or normalized raw text after import.
-
-### Phase 2: Read the Outline
-
-Read the local outline before building the draft.
-
-Use it to identify:
-
-- likely speaker names;
-- confirmed spelling of names, brands, and technical terms;
-- chapter titles and timestamps;
-- claims or quotations that need careful verification.
-
-The Python script records the outline path but does not understand the outline semantically. Outline comparison is the agent's responsibility.
-
-If speaker identities are unclear, ask the creator. Do not guess.
-
-### Phase 3: Prepare Mechanical Rules
-
-Use `corrections.json` only for exact replacements that are already confirmed:
-
-```json
-[
-  ["Open AI", "OpenAI"],
-  ["Chat G P T", "ChatGPT"]
-]
-```
-
-Use `chapters.json` for timestamp/title pairs:
-
-```json
-[
-  ["00:00", "开场"],
-  ["04:30", "嘉宾经历"]
-]
-```
-
-Context-dependent or uncertain corrections belong in the questions list, not in `corrections.json`.
-
-### Phase 4: Build the Structured Draft
+显式传入期号，避免从文件名误判：
 
 ```bash
-python3 "$SKILL_DIR/scripts/build_review.py" \
-  --raw 02_normalized_text/ep042/ep042.raw.txt \
-  --outline outlines/ep042.outline.md \
-  --output 03_review_draft/ep042/ep042.review.md \
-  --ep-id ep042 \
-  --speaker-map '{"发言人1":"嘉宾","发言人2":"主播"}' \
-  --corrections corrections.json \
-  --chapters chapters.json \
-  --title "Episode title"
+python3 "$SKILL_DIR/scripts/podcast_proofreader.py" prepare \
+  --project "<项目目录>" \
+  --input "<转写稿>" \
+  --ep-id "<期号>" \
+  --outline "<大纲.md>" \
+  --audio "<音频文件>"
 ```
 
-Verify that speech blocks were parsed. If the script reports zero blocks, check the speaker labels, timestamps, and speaker map before continuing.
+`--outline`、`--audio`、`--title`、`--duration` 均可省略。默认读取项目根目录
+的 `speaker_map.json` 和 `corrections.json`。不要自行改写生成的 JSON。
 
-### Phase 5: Perform Contextual Review
+### 3. 完成 Agent 语义复核
 
-Read the entire draft and compare it with the outline.
+读取以下两个文件并复核全文：
 
-Review especially:
+- `03_review_draft/<期号>/<期号>.review.json`
+- `03_review_draft/<期号>/<期号>.questions.json`
 
-- inconsistent names or titles;
-- unfamiliar proper nouns and brands;
-- suspicious numbers, dates, URLs, and negation;
-- broken grammar that may indicate ASR corruption;
-- abrupt topic changes;
-- factual, legal, medical, or financial claims that should not be silently rewritten.
+同时读取项目 `glossary/` 中已有术语表，并按需参考
+[`references/asr_patterns.md`](references/asr_patterns.md)。
 
-Apply only high-confidence corrections. Mark uncertain text with `[⚠️?]` and append:
+只产生两类判断：
 
-```markdown
----
+- `edits`：上下文充分、无需人工回听的确定修改。
+- `questions`：人名、术语、乱码、语义或合规等仍需人工确认的内容。
 
-## 疑点清单
+已有自动疑点不要重复添加，也不要用 `edits` 改动其目标原文。保留口语原意，
+不把文稿改写成文章；保护、合规或事实风险一律进入 `questions`。即使没有
+新增项，也必须提交空数组，以登记复核已完成。
 
-### 1. [类别] 简短标题
-- 时间戳：00:12:34
-- 原文：……
-- 疑点：……
-- 请确认：……
+将结果保存为 JSON 后执行：
+
+```bash
+python3 "$SKILL_DIR/scripts/podcast_proofreader.py" agent-review \
+  --project "<项目目录>" \
+  --ep-id "<期号>" \
+  --input "<agent-review.json>"
 ```
 
-Every question must carry a timestamp and a short transcript excerpt for replay.
+每次 `prepare` 后只执行一次 `agent-review`。成功后，把生成的
+`<期号>.editor-review.md` 交给用户或剪辑师。
 
-After this review is complete, update `manifests/ep042.json`:
+### 4. 登记人工确认
 
-- `status.ai_review_draft = true`
-- `outputs.review_draft` points to the review file
-- record the number of unresolved questions when practical
+仅根据用户明确回复生成 answers JSON；不要代替用户猜测。允许分批登记：
 
-### Phase 6: Human Confirmation
+```bash
+python3 "$SKILL_DIR/scripts/podcast_proofreader.py" resolve \
+  --project "<项目目录>" \
+  --ep-id "<期号>" \
+  --answers "<answers.json>"
+```
 
-Present the questions list to the creator. Do not create a final transcript while unresolved questions remain unless the creator explicitly asks to preserve them.
+若仍有待确认项，继续收集答案并重复 `resolve`。
 
-### Phase 7: Finalize
+### 5. 生成最终交付
 
-After the creator confirms the questions:
+仅在状态为 `ready_to_finalize` 时执行：
 
-1. Apply the confirmed answers to the review draft.
-2. Save confirmed episode terminology to `glossary/ep042_confirmed_terms.md`.
-3. Write `04_final_text/ep042/ep042.final.md`.
-4. Remove review-only markers that have been resolved.
-5. Update `manifests/ep042.json`:
-   - `status.human_final_review = true`
-   - `outputs.final_text` points to the final file
+```bash
+python3 "$SKILL_DIR/scripts/podcast_proofreader.py" finalize \
+  --project "<项目目录>" \
+  --ep-id "<期号>"
+```
 
-Do not overwrite the raw transcript or the first review draft without explicit permission.
+生成最终 Markdown、结构化时间轴和 JSONL 检索切片。
 
-## Review Principles
+## 操作规则
 
-1. Preserve meaning before improving style.
-2. Correct only confirmed or unambiguous errors automatically.
-3. Keep timestamps intact.
-4. Flag uncertainty instead of guessing.
-5. Treat previous glossary entries as references, not universal truth.
-6. Require human confirmation before finalization.
-
-## Bundled Resources
-
-- `scripts/import_docx.py` — extract DOCX text, archive the source, and create a manifest
-- `scripts/build_review.py` — map speakers, apply exact corrections, insert chapters, and write the structured draft
-- `references/asr_patterns.md` — generic Chinese podcast ASR review patterns
-- `template/sample_outline.md` — local outline example
-- `template/corrections_empty.json` — empty correction rules
-- `template/chapters_empty.json` — empty chapter definitions
-- `template/glossary_template.md` — confirmed-term format
-- `template/manifest_template.json` — episode status schema
+- 随时用
+  `python3 "$SKILL_DIR/scripts/podcast_proofreader.py" status --project "<项目目录>"`
+  查看状态；排障时加 `--ep-id` 或 `--json`。
+- 环境异常时先运行
+  `python3 "$SKILL_DIR/scripts/podcast_proofreader.py" doctor`。
+- 不直接编辑 `review.json`、`questions.json` 或 manifest；通过命令更新。
+- 不覆盖原始转写稿。`--force` 会重建已有结果，除非用户明确要求，否则不用。
+- 命令失败时先修正其指出的输入或契约问题，不跳过状态门禁。
