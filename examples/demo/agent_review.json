@@ -1,0 +1,14 @@
+{
+  "edits": [],
+  "questions": [
+    {
+      "block_id": "B00003",
+      "category": "外文术语",
+      "original": "Monstera deliciosa",
+      "suggestion": "Monstera deliciosa",
+      "reason": "请剪辑师回听确认拉丁学名发音与拼写。",
+      "confidence": "medium"
+    }
+  ],
+  "notes": "已按大纲完成全文语义复核。"
+}
