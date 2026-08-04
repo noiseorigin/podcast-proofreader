@@ -211,6 +211,8 @@ python3 scripts/podcast_proofreader.py doctor
 ```text
 init
   ↓
+check-outline：大纲预检，指出会让 prepare 失败的行
+  ↓
 prepare：导入、解析大纲、确定性纠错、生成结构化初校
   ↓
 agent-review：Agent 全文语义复核
@@ -240,16 +242,20 @@ finalize：最终文字稿 + 时间轴 + 检索切片
 python3 scripts/podcast_proofreader.py init \
   --project ~/my-podcast
 
-# 2. 准备初校
+# 2. 预检大纲
+python3 scripts/podcast_proofreader.py check-outline \
+  ~/my-podcast/outlines/ep001.outline.md
+
+# 3. 准备初校
+#    大纲、分期纠错、发言人映射、分期章节按期号自动发现，通常不用写
 python3 scripts/podcast_proofreader.py prepare \
   --project ~/my-podcast \
   --input ~/my-podcast/00_inbox/episode-001.docx \
-  --outline ~/my-podcast/outlines/ep001.md \
   --audio ~/my-podcast/audio/ep001.mp3 \
   --ep-id ep001 \
   --duration 01:12:30
 
-# 3. 查看状态
+# 4. 查看状态
 python3 scripts/podcast_proofreader.py status \
   --project ~/my-podcast \
   --ep-id ep001
@@ -279,9 +285,14 @@ my-podcast/
 │   └── ep001.timeline.json           # 结构化时间轴
 ├── 05_agent_chunks/ep001/
 │   └── ep001.chunks.jsonl            # 检索/RAG 切片
-├── manifests/ep001.json              # 单一流程状态
-├── speaker_map.json
-└── corrections.json
+├── manifests/ep001.json              # 单一流程状态；只放生成的 manifest
+├── config/by_ep/                     # 分期配置，按期号自动发现
+│   ├── ep001.corrections.json        #   叠加在全局 corrections.json 之上
+│   ├── ep001.speaker_map.json        #   替换全局 speaker_map.json
+│   └── ep001.chapters.json           #   大纲没有「时间轴」节时启用
+├── outlines/ep001.outline.md         # 按期号自动发现
+├── speaker_map.json                  # 全局
+└── corrections.json                  # 全局
 ```
 
 ## 可运行示例

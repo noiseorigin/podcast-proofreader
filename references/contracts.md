@@ -88,9 +88,35 @@ SRT/VTT 使用字幕起止时间，正文形如 `姓名：内容` 时识别姓�
 - H2 名称包含“术语”时读取术语表。第二列可用 `、 / , ， ; ；` 分隔多个错写。
 - 没有章节时自动生成从 `00:00:00` 开始的“全文”章节。
 
-### 发言人映射
+**全文只能有一个 H2 命中“时间轴”或“章节”。** 多个会直接报错并列出行号 ——
+早期版本会把它们合并解析，时间戳一撞就报“重复章节时间”，很难反查。
+备用分段节请改名避开这两个词，例如 `## 附：完整分段点（备用，不参与解析）`。
 
-默认读取项目根目录 `speaker_map.json`，也可用 `--speaker-map` 指定：
+时间轴节里的每个列表项都必须是“时间戳 + 标题”，混入说明文字会报错并指出行号。
+
+`check-outline` 子命令可在 `prepare` 之前批量预检，区分「失败」和「降级」：
+
+```bash
+python3 scripts/podcast_proofreader.py check-outline outlines/ep080.outline.md
+python3 scripts/podcast_proofreader.py check-outline --project <项目目录>
+```
+
+### 输入的解析顺序
+
+`prepare` 按以下优先级确定每一项输入，并把最终选用的路径写进 manifest 的
+`inputs`：
+
+| 输入 | 1. 命令行 | 2. 分期约定 | 3. 项目全局 |
+|---|---|---|---|
+| 大纲 | `--outline` | `outlines/<ep_id>.outline.md` | 无 |
+| 发言人映射 | `--speaker-map` | `config/by_ep/<ep_id>.speaker_map.json` | `speaker_map.json` |
+| 纠错 | `--corrections` | `config/by_ep/<ep_id>.corrections.json` | `corrections.json` |
+| 章节 | 大纲的「时间轴」节 | `config/by_ep/<ep_id>.chapters.json` | 单章“全文” |
+
+命令行显式给出时，该项完全接管，同名的分期文件不参与。
+分期纠错是**叠加**（见下），分期发言人映射是**替换**。
+
+### 发言人映射
 
 ```json
 {
@@ -104,7 +130,7 @@ SRT/VTT 使用字幕起止时间，正文形如 `姓名：内容` 时识别姓�
 
 ### 确定性纠错
 
-默认读取项目根目录 `corrections.json`，也可用 `--corrections` 指定。支持简写：
+支持简写：
 
 ```json
 [
@@ -126,6 +152,23 @@ SRT/VTT 使用字幕起止时间，正文形如 `姓名：内容` 时识别姓�
 
 规则会对所有 block 做一次性、非级联的精确字符串替换，只应放无歧义的确定性
 规则。命中次数写入 `review.json` 的 `correction_stats`。
+
+同一文件内 `from` 重复且 `to` 不同时报错。分期文件与全局文件之间不算冲突：
+分期规则先生效，全局同 `from` 的规则被丢弃。这样短规则（会误伤正常词的
+2 字规则）可以只在单期启用，不污染全局。
+
+### 分期章节
+
+`config/by_ep/<ep_id>.chapters.json` 只在大纲**没有**「时间轴 / 章节」节时启用：
+
+```json
+[
+  ["00:00", "开场"],
+  ["12:30", "主题讨论"]
+]
+```
+
+也支持 `[{"time": "00:00", "title": "开场"}]`。时间戳重复会报错。
 
 ### 其他可选输入
 

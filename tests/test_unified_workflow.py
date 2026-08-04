@@ -780,5 +780,202 @@ class WorkflowTestCase(unittest.TestCase):
         self.assertFalse((self.workspace / "escape").exists())
 
 
+    # --- 按期号自动发现 outlines/ 和 config/by_ep/ 下的输入 ---
+
+    def prepare_by_convention(
+        self, *, expected_returncode: int = 0
+    ) -> subprocess.CompletedProcess[str]:
+        return self.run_cli(
+            "prepare",
+            "--project",
+            self.project,
+            "--input",
+            self.transcript,
+            "--ep-id",
+            "ep001",
+            expected_returncode=expected_returncode,
+        )
+
+    def test_outline_and_episode_config_are_discovered_by_episode_id(self) -> None:
+        self.init_project()
+        shutil.copy2(DEMO / "outline.md", self.project / "outlines" / "ep001.outline.md")
+        by_ep = self.project / "config" / "by_ep"
+        self.write_json(by_ep / "ep001.speaker_map.json", {"发言人1": "周原"})
+
+        result = self.prepare_by_convention()
+
+        self.assertIn("outlines/ep001.outline.md", result.stdout)
+        self.assertIn("config/by_ep/ep001.speaker_map.json", result.stdout)
+        manifest = self.load_json(self.project / "manifests" / "ep001.json")
+        self.assertEqual(manifest["inputs"]["outline"], "outlines/ep001.outline.md")
+        self.assertEqual(
+            manifest["inputs"]["speaker_map"],
+            "config/by_ep/ep001.speaker_map.json",
+        )
+        review = self.load_json(
+            self.project / "03_review_draft" / "ep001" / "ep001.review.json"
+        )
+        self.assertEqual(review["blocks"][0]["speaker"], "周原")
+
+    def test_explicit_flags_win_over_episode_convention(self) -> None:
+        self.init_project()
+        by_ep = self.project / "config" / "by_ep"
+        self.write_json(by_ep / "ep001.speaker_map.json", {"发言人1": "不该被使用"})
+
+        self.run_cli(
+            "prepare",
+            "--project",
+            self.project,
+            "--input",
+            self.transcript,
+            "--ep-id",
+            "ep001",
+            "--speaker-map",
+            DEMO / "speaker_map.json",
+        )
+
+        review = self.load_json(
+            self.project / "03_review_draft" / "ep001" / "ep001.review.json"
+        )
+        self.assertEqual(review["blocks"][0]["speaker"], "周原")
+
+    def test_episode_corrections_override_global_instead_of_conflicting(self) -> None:
+        self.init_project()
+        self.write_json(
+            self.project / "corrections.json",
+            [{"from": "回蓝天", "to": "回南天"}, {"from": "室内植物", "to": "全局段"}],
+        )
+        self.write_json(
+            self.project / "config" / "by_ep" / "ep001.corrections.json",
+            [{"from": "室内植物", "to": "分期段"}],
+        )
+
+        self.prepare_by_convention()
+
+        review = self.load_json(
+            self.project / "03_review_draft" / "ep001" / "ep001.review.json"
+        )
+        text = "\n".join(block["text"] for block in review["blocks"])
+        self.assertIn("分期段", text)
+        self.assertNotIn("全局段", text)
+        self.assertIn("回南天", text)
+
+    def test_episode_chapters_used_when_outline_has_no_timeline(self) -> None:
+        self.init_project()
+        (self.project / "outlines" / "ep001.outline.md").write_text(
+            "# 演示节目\n\n## 节目介绍\n一句话简介。\n", encoding="utf-8"
+        )
+        self.write_json(
+            self.project / "config" / "by_ep" / "ep001.chapters.json",
+            [["00:00", "开场"], ["00:08", "正题"]],
+        )
+
+        result = self.prepare_by_convention()
+
+        self.assertIn("ep001.chapters.json", result.stdout)
+        review = self.load_json(
+            self.project / "03_review_draft" / "ep001" / "ep001.review.json"
+        )
+        self.assertEqual(
+            [chapter["title"] for chapter in review["chapters"]], ["开场", "正题"]
+        )
+
+    def test_episode_chapters_apply_to_explicitly_passed_outline_too(self) -> None:
+        self.init_project()
+        outline = self.workspace / "custom.outline.md"
+        outline.write_text("# 演示节目\n\n## 节目介绍\n简介。\n", encoding="utf-8")
+        self.write_json(
+            self.project / "config" / "by_ep" / "ep001.chapters.json",
+            [["00:00", "开场"], ["00:08", "正题"]],
+        )
+
+        self.run_cli(
+            "prepare",
+            "--project",
+            self.project,
+            "--input",
+            self.transcript,
+            "--ep-id",
+            "ep001",
+            "--outline",
+            outline,
+        )
+
+        review = self.load_json(
+            self.project / "03_review_draft" / "ep001" / "ep001.review.json"
+        )
+        self.assertEqual(
+            [chapter["title"] for chapter in review["chapters"]], ["开场", "正题"]
+        )
+
+    def test_outline_timeline_wins_over_episode_chapters(self) -> None:
+        self.init_project()
+        shutil.copy2(DEMO / "outline.md", self.project / "outlines" / "ep001.outline.md")
+        self.write_json(
+            self.project / "config" / "by_ep" / "ep001.chapters.json",
+            [["00:00", "不该被使用"]],
+        )
+
+        self.prepare_by_convention()
+
+        review = self.load_json(
+            self.project / "03_review_draft" / "ep001" / "ep001.review.json"
+        )
+        titles = [chapter["title"] for chapter in review["chapters"]]
+        self.assertNotIn("不该被使用", titles)
+
+
+    # --- 大纲预检 ---
+
+    def write_outline(self, body: str) -> Path:
+        path = self.workspace / "outline.md"
+        path.write_text(body, encoding="utf-8")
+        return path
+
+    def test_duplicate_timeline_sections_are_rejected_with_line_numbers(self) -> None:
+        outline = self.write_outline(
+            "# 演示节目\n\n"
+            "## 时间轴\n"
+            "- 00:00 开场\n\n"
+            "## 完整章节点（备用）\n"
+            "- 00:00 开场\n"
+        )
+        result = self.run_cli("check-outline", outline, expected_returncode=2)
+        self.assertIn("时间轴", result.stdout + result.stderr)
+        self.assertIn("第 3 行", result.stdout + result.stderr)
+        self.assertIn("第 6 行", result.stdout + result.stderr)
+
+    def test_non_chapter_line_inside_timeline_reports_line_number(self) -> None:
+        outline = self.write_outline(
+            "# 演示节目\n\n## 时间轴\n- 00:00 开场\n- 这行不是章节\n"
+        )
+        result = self.run_cli("check-outline", outline, expected_returncode=2)
+        self.assertIn("第 5 行", result.stdout + result.stderr)
+
+    def test_clean_outline_passes_and_lists_degradations(self) -> None:
+        outline = self.write_outline("# 演示节目\n\n## 时间轴\n- 00:00 开场\n")
+        result = self.run_cli("check-outline", outline)
+        self.assertIn("[通过]", result.stdout)
+        self.assertIn("术语线索", result.stdout)
+        self.assertIn("0 份会导致 prepare 失败", result.stdout)
+
+
+    # --- manifests/ 混入外来文件 ---
+
+    def test_status_skips_foreign_manifests_instead_of_crashing(self) -> None:
+        self.init_project()
+        # 旧流水线留下的同名文件：status 里 status 是 dict 而不是字符串。
+        self.write_json(
+            self.project / "manifests" / "ep900.json",
+            {"episode_id": "ep900", "status": {"ai_review_draft": True}},
+        )
+
+        result = self.run_cli("status", "--project", self.project)
+
+        self.assertIn("ep900.json", result.stdout)
+        self.assertIn("跳过", result.stdout)
+        self.assertNotIn("Traceback", result.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()
