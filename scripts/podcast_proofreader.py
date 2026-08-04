@@ -43,7 +43,11 @@ PROJECT_DIRS = (
     "outlines",
     "glossary",
     "manifests",
+    "config/by_ep",
 )
+
+# 按期号约定自动发现的输入。显式命令行参数始终优先。
+EPISODE_CONFIG_DIR = "config/by_ep"
 
 
 class WorkflowError(Exception):
@@ -455,7 +459,33 @@ def load_speaker_map(path: Path | None) -> dict[str, str]:
     return {key.strip(): value.strip() for key, value in data.items()}
 
 
-def load_corrections(path: Path | None) -> list[dict[str, str]]:
+def episode_config_path(project: Path, ep_id: str, kind: str) -> Path | None:
+    """按约定查找分期配置：config/by_ep/<ep_id>.<kind>.json。"""
+    candidate = project / EPISODE_CONFIG_DIR / f"{ep_id}.{kind}.json"
+    return candidate if candidate.is_file() else None
+
+
+def default_outline_path(project: Path, ep_id: str) -> Path | None:
+    """按约定查找大纲：outlines/<ep_id>.outline.md。"""
+    candidate = project / "outlines" / f"{ep_id}.outline.md"
+    return candidate if candidate.is_file() else None
+
+
+def load_corrections(
+    path: Path | None, overrides: Path | None = None
+) -> list[dict[str, str]]:
+    """加载纠错规则。
+
+    `overrides` 用于分期规则：同一个 `from` 时分期规则覆盖全局规则，
+    而不是像同一文件内那样判定为冲突。
+    """
+    if overrides is not None:
+        episode_rules = load_corrections(overrides)
+        global_rules = load_corrections(path)
+        overridden = {rule["from"] for rule in episode_rules}
+        return episode_rules + [
+            rule for rule in global_rules if rule["from"] not in overridden
+        ]
     if path is None:
         return []
     data = load_json(path, "纠错规则")
@@ -488,13 +518,85 @@ def load_corrections(path: Path | None) -> list[dict[str, str]]:
         if rule["from"] in seen:
             if seen[rule["from"]] != rule["to"]:
                 raise WorkflowError(
-                    f"纠错规则冲突：{rule['from']} 同时映射到 "
+                    f"{path.name} 中纠错规则冲突：{rule['from']} 同时映射到 "
                     f"{seen[rule['from']]} 和 {rule['to']}。"
                 )
             continue
         seen[rule["from"]] = rule["to"]
         rules.append(rule)
     return rules
+
+
+def outline_degradations(
+    outline: dict[str, Any], *, chapters_covered: bool = False
+) -> list[str]:
+    """列出不会让 prepare 失败、但会降低产出质量的问题。
+
+    `chapters_covered` 表示章节已由分期 chapters.json 补上，不再提示缺时间轴节。
+    """
+    notes: list[str] = []
+    if not outline["chapters"] and not chapters_covered:
+        notes.append(
+            "缺「## 时间轴」节 —— 章节退化为单章「全文」，"
+            "timeline.json 和分章切片失去意义。"
+        )
+    if not outline["term_hints"]:
+        notes.append("缺「## 本期术语线索」节 —— 专有名词识别准确度下降。")
+    if not outline["description"]:
+        notes.append("缺「## 节目介绍」节 —— 读不到简介。")
+    if not outline["people"]:
+        notes.append("缺「## 节目信息」里的主播/嘉宾 —— 发言人疑点会更多。")
+    title = outline["title"]
+    if not title:
+        notes.append("没有 H1 —— 标题会退回文件名。")
+    elif re.match(r"^\s*(\d+[.、]|ep\d+|第?\s*\d+\s*期)", title, re.IGNORECASE):
+        notes.append(
+            f"H1「{title}」不像节目标题 —— 会被当成节目名写进最终稿，"
+            "建议改成正式标题或用 --title 覆盖。"
+        )
+    return notes
+
+
+def load_chapters(path: Path) -> list[dict[str, Any]]:
+    """加载分期章节 JSON，作为大纲没有时间轴节时的备用章节来源。
+
+    支持 `[["00:04", "标题"], ...]` 和
+    `[{"time": "00:04", "title": "标题"}, ...]` 两种写法。
+    """
+    data = load_json(path, "章节")
+    if not isinstance(data, list):
+        raise WorkflowError(f"{path.name} 必须是 JSON 数组。")
+    chapters: list[dict[str, Any]] = []
+    for index, item in enumerate(data, start=1):
+        if isinstance(item, list) and len(item) == 2:
+            stamp, title = item
+        elif isinstance(item, dict):
+            stamp = item.get("time") or item.get("start")
+            title = item.get("title")
+        else:
+            raise WorkflowError(f"{path.name} 第 {index} 项格式错误。")
+        if not isinstance(stamp, str) or not isinstance(title, str) or not title.strip():
+            raise WorkflowError(
+                f"{path.name} 第 {index} 项需要字符串时间戳和标题。"
+            )
+        if not re.fullmatch(TIME_TOKEN, stamp.strip()):
+            raise WorkflowError(
+                f"{path.name} 第 {index} 项时间戳无法解析：{stamp}"
+            )
+        chapters.append(
+            {
+                "start_seconds": parse_time(stamp.strip()),
+                "title": title.strip(),
+            }
+        )
+    chapters.sort(key=lambda item: item["start_seconds"])
+    for previous, current in zip(chapters, chapters[1:]):
+        if previous["start_seconds"] == current["start_seconds"]:
+            raise WorkflowError(
+                f"{path.name} 存在重复章节时间："
+                f"{format_time(previous['start_seconds'])}"
+            )
+    return chapters
 
 
 def parse_outline(path: Path | None) -> dict[str, Any]:
@@ -512,27 +614,50 @@ def parse_outline(path: Path | None) -> dict[str, Any]:
     text = read_text_with_fallback(path)
     title_match = re.search(r"^#\s+(.+)$", text, re.MULTILINE)
     title = title_match.group(1).strip() if title_match else ""
-    sections: dict[str, list[str]] = {}
-    current = ""
-    for line in text.splitlines():
+
+    # 保留每节的行号，报错才能指到具体位置。
+    sections: list[dict[str, Any]] = []
+    for lineno, line in enumerate(text.splitlines(), start=1):
         heading = re.match(r"^##\s+(.+)$", line)
         if heading:
-            current = heading.group(1).strip()
-            sections.setdefault(current, [])
-        elif current:
-            sections[current].append(line)
+            sections.append(
+                {"name": heading.group(1).strip(), "lineno": lineno, "lines": []}
+            )
+        elif sections:
+            sections[-1]["lines"].append((lineno, line))
+
+    # 命中「时间轴 / 章节」的 H2 只能有一个，否则两节会被合并解析，
+    # 时间戳一撞就报“重复章节时间”，很难反查到底是哪一节写错。
+    timeline_sections = [
+        section
+        for section in sections
+        if any(key in section["name"] for key in ("时间轴", "章节"))
+    ]
+    if len(timeline_sections) > 1:
+        listed = "、".join(
+            f"第 {section['lineno']} 行「## {section['name']}」"
+            for section in timeline_sections
+        )
+        raise WorkflowError(
+            f"{path.name} 有 {len(timeline_sections)} 个 H2 命中「时间轴」或「章节」："
+            f"{listed}。两节会被合并解析，请只保留一个，"
+            "其余改名避开这两个词（例如「## 附：完整分段点（备用，不参与解析）」）。"
+        )
 
     description = ""
     chapters: list[dict[str, Any]] = []
     people: list[str] = []
     term_hints: list[dict[str, str]] = []
+    chapter_lines: dict[int, int] = {}
 
-    for name, lines in sections.items():
-        joined = "\n".join(lines).strip()
+    for section in sections:
+        name = section["name"]
+        lines = section["lines"]
+        joined = "\n".join(line for _, line in lines).strip()
         if any(key in name for key in ("节目介绍", "节目简介", "简介")):
             description = joined
         if any(key in name for key in ("时间轴", "章节")):
-            for line in lines:
+            for lineno, line in lines:
                 if not re.match(r"^\s*[-*]\s+", line):
                     continue
                 match = re.match(
@@ -542,17 +667,20 @@ def parse_outline(path: Path | None) -> dict[str, Any]:
                 )
                 if not match:
                     raise WorkflowError(
-                        f"大纲时间轴格式错误：{line.strip()} "
-                        "（应为“- 00:00 章节标题”）"
+                        f"{path.name} 第 {lineno} 行时间轴格式错误："
+                        f"{line.strip()}（应为“- 00:00 章节标题”）。"
+                        "非章节内容请移出本节。"
                     )
+                seconds = parse_time(match.group("ts"))
+                chapter_lines[seconds] = lineno
                 chapters.append(
                     {
-                        "start_seconds": parse_time(match.group("ts")),
+                        "start_seconds": seconds,
                         "title": match.group("title").strip(),
                     }
                 )
         if any(key in name for key in ("节目信息", "嘉宾", "主播")):
-            for line in lines:
+            for _, line in lines:
                 match = re.match(r"^\s*[-*]\s*(?:主播|嘉宾)[：:]\s*(.+)$", line)
                 if match:
                     for person in re.split(r"[、,，/]", match.group(1)):
@@ -560,7 +688,7 @@ def parse_outline(path: Path | None) -> dict[str, Any]:
                         if clean and clean not in people:
                             people.append(clean)
         if "术语" in name:
-            for line in lines:
+            for _, line in lines:
                 if not line.strip().startswith("|"):
                     continue
                 cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
@@ -579,8 +707,11 @@ def parse_outline(path: Path | None) -> dict[str, Any]:
     chapters.sort(key=lambda item: item["start_seconds"])
     for previous, current_chapter in zip(chapters, chapters[1:]):
         if previous["start_seconds"] == current_chapter["start_seconds"]:
+            lineno = chapter_lines.get(previous["start_seconds"])
+            where = f"（见第 {lineno} 行附近）" if lineno else ""
             raise WorkflowError(
-                f"大纲存在重复章节时间：{format_time(previous['start_seconds'])}"
+                f"{path.name} 存在重复章节时间："
+                f"{format_time(previous['start_seconds'])}{where}"
             )
     return {
         "path": str(path.resolve()),
@@ -1031,6 +1162,10 @@ def command_init(args: argparse.Namespace) -> None:
         repo_root / "template" / "glossary_template.md": project
         / "glossary"
         / "README.md",
+        repo_root / "template" / "by_ep_readme.md": project
+        / "config"
+        / "by_ep"
+        / "README.md",
     }
     created: list[str] = []
     skipped: list[str] = []
@@ -1054,7 +1189,8 @@ def command_init(args: argparse.Namespace) -> None:
         print("新建：" + "、".join(created))
     if skipped:
         print("保留已有文件：" + "、".join(skipped))
-    print("下一步：把转写稿放入 00_inbox/，并运行 prepare。")
+    print("下一步：把转写稿放入 00_inbox/，写好 outlines/<期号>.outline.md，")
+    print("      先 check-outline 预检，再 prepare。")
 
 
 def command_prepare(args: argparse.Namespace) -> None:
@@ -1067,20 +1203,52 @@ def command_prepare(args: argparse.Namespace) -> None:
     ep_id = validate_episode_id(args.ep_id or derive_episode_id(source))
     output_paths = paths_for(project, ep_id)
 
-    outline_path = Path(args.outline).expanduser().resolve() if args.outline else None
-    speaker_map_path = (
-        Path(args.speaker_map).expanduser().resolve()
-        if args.speaker_map
-        else (project / "speaker_map.json" if (project / "speaker_map.json").is_file() else None)
-    )
-    corrections_path = (
-        Path(args.corrections).expanduser().resolve()
-        if args.corrections
-        else (project / "corrections.json" if (project / "corrections.json").is_file() else None)
-    )
+    # 输入解析：显式参数 > 分期约定（config/by_ep、outlines） > 项目全局。
+    resolved: list[str] = []
+
+    if args.outline:
+        outline_path = Path(args.outline).expanduser().resolve()
+    else:
+        outline_path = default_outline_path(project, ep_id)
+        if outline_path is not None:
+            resolved.append(f"大纲 {relative_to_project(outline_path, project)}")
+
+    if args.speaker_map:
+        speaker_map_path = Path(args.speaker_map).expanduser().resolve()
+    else:
+        speaker_map_path = episode_config_path(project, ep_id, "speaker_map")
+        if speaker_map_path is not None:
+            resolved.append(
+                f"发言人映射 {relative_to_project(speaker_map_path, project)}"
+            )
+        elif (project / "speaker_map.json").is_file():
+            speaker_map_path = project / "speaker_map.json"
+
+    # 分期纠错叠加在全局纠错之上；显式 --corrections 则完全接管。
+    episode_corrections_path: Path | None = None
+    if args.corrections:
+        corrections_path = Path(args.corrections).expanduser().resolve()
+    else:
+        corrections_path = (
+            project / "corrections.json"
+            if (project / "corrections.json").is_file()
+            else None
+        )
+        episode_corrections_path = episode_config_path(project, ep_id, "corrections")
+        if episode_corrections_path is not None:
+            resolved.append(
+                f"分期纠错 {relative_to_project(episode_corrections_path, project)}"
+            )
+
+    # 章节只在大纲没有时间轴节时才用得上，与大纲是显式给的还是自动找到的无关。
+    episode_chapters_path = episode_config_path(project, ep_id, "chapters")
+
     audio_path = Path(args.audio).expanduser().resolve() if args.audio else None
     if audio_path is not None and not audio_path.is_file():
         raise WorkflowError(f"音频文件不存在：{audio_path}")
+
+    for item in resolved:
+        print(f"按期号自动使用：{item}")
 
     input_hashes = {
         "transcript": file_sha256(source),
@@ -1088,6 +1256,12 @@ def command_prepare(args: argparse.Namespace) -> None:
         "speaker_map": file_sha256(speaker_map_path) if speaker_map_path else "",
         "corrections": file_sha256(corrections_path) if corrections_path else "",
     }
+    # 只在真的用到分期文件时才进指纹，否则老项目会因为多了两个空字段
+    # 而认为输入变了，白白要求 --force。
+    if episode_corrections_path is not None:
+        input_hashes["episode_corrections"] = file_sha256(episode_corrections_path)
+    if episode_chapters_path is not None:
+        input_hashes["episode_chapters"] = file_sha256(episode_chapters_path)
     prepare_fingerprint = json_fingerprint(
         {
             "workflow_revision": WORKFLOW_REVISION,
@@ -1132,10 +1306,25 @@ def command_prepare(args: argparse.Namespace) -> None:
         raise WorkflowError("没有识别出任何正文块，请检查转写格式。")
 
     blocks = assign_block_ids(parsed, speaker_map)
-    corrections = load_corrections(corrections_path)
+    corrections = load_corrections(corrections_path, episode_corrections_path)
     correction_stats = apply_corrections(blocks, corrections)
     outline = parse_outline(outline_path)
-    chapters = outline["chapters"] or [{"start_seconds": 0, "title": "全文"}]
+    chapters = outline["chapters"]
+    if not chapters and episode_chapters_path is not None:
+        chapters = load_chapters(episode_chapters_path)
+        print(
+            f"大纲无时间轴节，改用 "
+            f"{relative_to_project(episode_chapters_path, project)}"
+            f"（{len(chapters)} 章）。"
+        )
+    have_chapters = bool(chapters)
+    chapters = chapters or [{"start_seconds": 0, "title": "全文"}]
+    if outline_path is None:
+        print("⚠️ 没有大纲：章节退化为单章「全文」，标题取自文件名。")
+    else:
+        # 章节已由 chapters.json 补上时，不必再提示大纲缺时间轴节。
+        for note in outline_degradations(outline, chapters_covered=have_chapters):
+            print(f"⚠️ 大纲降级：{note}")
     if chapters[0]["start_seconds"] > 0:
         chapters.insert(0, {"start_seconds": 0, "title": "开场"})
     for index, chapter in enumerate(chapters, start=1):
@@ -1164,6 +1353,8 @@ def command_prepare(args: argparse.Namespace) -> None:
         "audio": relative_to_project(audio_path, project),
         "speaker_map": relative_to_project(speaker_map_path, project),
         "corrections": relative_to_project(corrections_path, project),
+        "episode_corrections": relative_to_project(episode_corrections_path, project),
+        "episode_chapters": relative_to_project(episode_chapters_path, project),
         "sha256": input_hashes,
         "prepare_fingerprint": prepare_fingerprint,
     }
@@ -1824,7 +2015,32 @@ def command_status(args: argparse.Namespace) -> None:
         return
     if args.ep_id and not manifests[0].is_file():
         raise WorkflowError(f"找不到期号 {args.ep_id} 的状态记录。")
-    data = [load_json(path, "Manifest") for path in manifests if path.is_file()]
+
+    data: list[dict[str, Any]] = []
+    foreign: list[str] = []
+    for path in manifests:
+        if not path.is_file():
+            continue
+        manifest = load_json(path, "Manifest")
+        # manifests/ 里可能混进别的流水线留下的同名文件；跳过而不是崩溃。
+        if (
+            not isinstance(manifest, dict)
+            or manifest.get("schema_version") != SCHEMA_MANIFEST
+            or not isinstance(manifest.get("status"), str)
+        ):
+            foreign.append(path.name)
+            continue
+        data.append(manifest)
+
+    if foreign:
+        print(
+            f"⚠️ 跳过 {len(foreign)} 个非本流程的 manifest（缺少 "
+            f"{SCHEMA_MANIFEST}）：" + "、".join(foreign)
+        )
+        print("   请把它们移出 manifests/，否则每次 status 都会看到这条提醒。")
+    if not data:
+        print("暂无节目记录。")
+        return
     if args.json:
         print(json.dumps(data, ensure_ascii=False, indent=2))
         return
@@ -1842,6 +2058,39 @@ def command_status(args: argparse.Namespace) -> None:
             f"{counts.get('questions_pending', 0)} 条待确认 · "
             f"{next_steps.get(manifest['status'], '请检查状态')}"
         )
+
+
+def command_check_outline(args: argparse.Namespace) -> None:
+    if args.outline:
+        targets = [Path(item).expanduser().resolve() for item in args.outline]
+    elif args.project:
+        project = Path(args.project).expanduser().resolve()
+        targets = sorted((project / "outlines").glob("ep*.outline.md"))
+    else:
+        raise WorkflowError("请给出大纲文件，或用 --project 指定项目目录。")
+    if not targets:
+        print("没有找到要检查的大纲。")
+        return
+
+    failed = 0
+    for path in targets:
+        print(f"\n{path.name}")
+        try:
+            outline = parse_outline(path)
+        except WorkflowError as error:
+            failed += 1
+            print(f"    [失败] {error}")
+            continue
+        notes = outline_degradations(outline)
+        chapters = len(outline["chapters"])
+        terms = len(outline["term_hints"])
+        print(f"    [通过] {chapters} 章 · {terms} 条术语线索")
+        for note in notes:
+            print(f"    [降级] {note}")
+
+    print(f"\n共 {len(targets)} 份，{failed} 份会导致 prepare 失败。")
+    if failed:
+        raise WorkflowError("请先修复上面标记为「失败」的大纲。")
 
 
 def command_doctor(_: argparse.Namespace) -> None:
@@ -1925,6 +2174,17 @@ def build_parser() -> argparse.ArgumentParser:
     status_parser.add_argument("--ep-id")
     status_parser.add_argument("--json", action="store_true")
     status_parser.set_defaults(func=command_status)
+
+    check_outline_parser = subparsers.add_parser(
+        "check-outline", help="大纲预检，prepare 之前跑"
+    )
+    check_outline_parser.add_argument(
+        "--project", help="项目目录；不指定大纲时检查 outlines/ep*.outline.md"
+    )
+    check_outline_parser.add_argument(
+        "outline", nargs="*", help="要检查的大纲文件；省略则检查整个项目"
+    )
+    check_outline_parser.set_defaults(func=command_check_outline)
 
     doctor_parser = subparsers.add_parser("doctor", help="检查运行环境")
     doctor_parser.set_defaults(func=command_doctor)

@@ -3,7 +3,7 @@ name: podcast-proofreader
 description: 将播客 ASR 转写稿整理为结构化初校、语义疑点、剪辑校对稿和最终文字稿。用户要求导入或校对播客文稿、根据大纲纠错、识别发言人、生成疑点清单、登记人工确认、生成时间轴或知识库切片时使用；支持 DOCX、TXT、Markdown、SRT、VTT。
 license: MIT
 metadata:
-  version: "1.1.0"
+  version: "1.2.0"
   author: noiseorigin
   homepage: https://github.com/noiseorigin/podcast-proofreader
   compatibility: Python 3.10+；推荐流程不需要第三方 Python 依赖
@@ -52,7 +52,7 @@ python3 "$SKILL_DIR/scripts/podcast_proofreader.py" doctor
 严格按以下顺序执行：
 
 ```text
-init → prepare → agent-review → resolve → finalize
+init → check-outline → prepare → agent-review → resolve → finalize
 ```
 
 ### 1. 初始化
@@ -65,7 +65,19 @@ python3 "$SKILL_DIR/scripts/podcast_proofreader.py" init \
 初始化可安全重复执行，不覆盖已有配置。建议把转写稿放入项目的
 `00_inbox/`；按需填写 `speaker_map.json`、`corrections.json` 和大纲。
 
-### 2. 准备初校
+### 2. 预检大纲
+
+大纲写错是 `prepare` 失败的首要原因，先跑预检：
+
+```bash
+python3 "$SKILL_DIR/scripts/podcast_proofreader.py" check-outline \
+  "<项目目录>/outlines/<期号>.outline.md"
+```
+
+省略文件参数、改传 `--project` 时会检查整个 `outlines/`。
+输出分「失败」（必须修）和「降级」（不阻塞，但会降低产出质量）两类。
+
+### 3. 准备初校
 
 显式传入期号，避免从文件名误判：
 
@@ -74,14 +86,24 @@ python3 "$SKILL_DIR/scripts/podcast_proofreader.py" prepare \
   --project "<项目目录>" \
   --input "<转写稿>" \
   --ep-id "<期号>" \
-  --outline "<大纲.md>" \
   --audio "<音频文件>"
 ```
 
-`--outline`、`--audio`、`--title`、`--duration` 均可省略。默认读取项目根目录
-的 `speaker_map.json` 和 `corrections.json`。不要自行改写生成的 JSON。
+`--audio`、`--title`、`--duration` 均可省略。不要自行改写生成的 JSON。
 
-### 3. 完成 Agent 语义复核
+**输入按期号自动发现，通常不用写 `--outline` / `--corrections` / `--speaker-map`：**
+
+| 输入 | 自动查找 | 与全局的关系 |
+|---|---|---|
+| 大纲 | `outlines/<期号>.outline.md` | — |
+| 纠错 | `config/by_ep/<期号>.corrections.json` | **叠加**在根目录 `corrections.json` 之上，同一 `from` 时分期规则胜出 |
+| 发言人映射 | `config/by_ep/<期号>.speaker_map.json` | **替换**根目录 `speaker_map.json` |
+| 章节 | `config/by_ep/<期号>.chapters.json` | 仅在大纲没有「## 时间轴」节时启用 |
+
+命令行显式给出时，该项完全接管，同名的分期文件不再参与。
+`prepare` 会打印自动选用了哪些文件，以及大纲的降级项。
+
+### 4. 完成 Agent 语义复核
 
 读取以下两个文件并复核全文：
 
@@ -112,7 +134,7 @@ python3 "$SKILL_DIR/scripts/podcast_proofreader.py" agent-review \
 每次 `prepare` 后只执行一次 `agent-review`。成功后，把生成的
 `<期号>.editor-review.md` 交给用户或剪辑师。
 
-### 4. 登记人工确认
+### 5. 登记人工确认
 
 仅根据用户明确回复生成 answers JSON；不要代替用户猜测。允许分批登记：
 
@@ -125,7 +147,7 @@ python3 "$SKILL_DIR/scripts/podcast_proofreader.py" resolve \
 
 若仍有待确认项，继续收集答案并重复 `resolve`。
 
-### 5. 生成最终交付
+### 6. 生成最终交付
 
 仅在状态为 `ready_to_finalize` 时执行：
 
@@ -147,3 +169,7 @@ python3 "$SKILL_DIR/scripts/podcast_proofreader.py" finalize \
 - 不直接编辑 `review.json`、`questions.json` 或 manifest；通过命令更新。
 - 不覆盖原始转写稿。`--force` 会重建已有结果，除非用户明确要求，否则不用。
 - 命令失败时先修正其指出的输入或契约问题，不跳过状态门禁。
+- `manifests/` 只放本流程生成的 manifest。混入其他文件时 `status` 会提示跳过，
+  把它们移出目录即可。
+- `prepare` 的自动发现只认 `<期号>.` 前缀。文件名不合约定就不会被选中，
+  看 `prepare` 打印的「按期号自动使用」确认到底用了什么。

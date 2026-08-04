@@ -38,22 +38,46 @@ class PodcastProofreaderWorkflowTests(unittest.TestCase):
             "02_normalized_text",
             "03_review_draft",
             "04_final_text",
+            "05_agent_chunks",
             "outlines",
             "glossary",
             "manifests",
+            "config",
         }
         actual = {path.name for path in self.workspace.iterdir() if path.is_dir()}
 
         self.assertEqual(actual, expected)
         self.assertTrue((self.workspace / "corrections.json").is_file())
-        self.assertTrue((self.workspace / "chapters.json").is_file())
-        self.assertFalse((self.workspace / "05_agent_chunks").exists())
+        self.assertTrue((self.workspace / "speaker_map.json").is_file())
+        self.assertTrue((self.workspace / "config" / "by_ep").is_dir())
         self.assertFalse((self.workspace / "imports").exists())
+        # manifests/ 只放生成的 manifest：多一个模板文件，status 就会每次报“跳过”。
+        self.assertEqual(list((self.workspace / "manifests").glob("*.json")), [])
 
         corrections = self.workspace / "corrections.json"
         corrections.write_text('[["custom", "kept"]]\n', encoding="utf-8")
         self.initialize_workspace()
         self.assertEqual(corrections.read_text(encoding="utf-8"), '[["custom", "kept"]]\n')
+
+    def test_shell_and_python_init_produce_the_same_project(self):
+        self.initialize_workspace()
+        python_workspace = self.workspace.parent / "python_init"
+        self.run_command(
+            sys.executable,
+            SKILL_DIR / "scripts" / "podcast_proofreader.py",
+            "init",
+            "--project",
+            python_workspace,
+        )
+
+        def layout(root):
+            return {
+                str(path.relative_to(root))
+                for path in root.rglob("*")
+                if path.name != ".gitkeep"
+            }
+
+        self.assertEqual(layout(self.workspace), layout(python_workspace))
 
     def test_docx_import_and_structured_draft(self):
         self.initialize_workspace()
